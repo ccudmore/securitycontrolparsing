@@ -20,21 +20,22 @@ public class SecurityControlScan {
 		FileInputStream fis = null;
 		String fileName = null;
         boolean doDebug = false;
+		boolean doComments = false;
 		if (args.length < 1) {System.out.println("Missing file name."); return;}
 		fileName = args[0];
 		if (args.length == 2 && args[1].contains("debug")) {doDebug = true;}
+		if (args.length == 2 && args[1].contains("comments")) {doComments = true;}
+		if (args.length == 3 && args[1].contains("debug")&& args[2].contains("comments")) {doDebug = true; doComments = true;}
         if (doDebug) {
         	long heapSize = Runtime.getRuntime().maxMemory();
         	System.out.println("Maximum heap size is "+heapSize);
 			//CC 17-03-2022
-			//DS testing code to collect comments, trying to match a comment with a document section. 
-		    // I tried using IBodyElement bodyElement but it only returns paragraph and tables not comments.
-		    // See if you can find anything.  
-		
-			System.out.println("Compile Date: 29-06-2022");
+			//July 4, 2022 - CC and DS added (comment to csv) capability  (uncludes extraction of 
+			//Comment ID, Author, Comment Text and the comment anchor/highlighted document text)
+			    		
+			System.out.println("Compile Date: 04-07-2022");
         }
 		
-			
 		int[] levelValues = new int[] {0,0,0,0,0,0};
 		try {
 			// Read the input file and split it apart using Apache POI
@@ -44,7 +45,10 @@ public class SecurityControlScan {
             List<XWPFParagraph> pl = xdoc.getParagraphs();			
 			            
             String sectionName = "";
+						
             Map<String, ArrayList<String>> controlsMap = new HashMap<String,ArrayList<String>> ();
+			Map<String, ArrayList<String>> commentsMap = new HashMap<String,ArrayList<String>> ();
+			
             // Examine each paragraph and look for headings and comments
 			for (XWPFParagraph p : pl) {
 				String style = p.getStyle();
@@ -53,11 +57,13 @@ public class SecurityControlScan {
 					// when the current level changes, reset all of the child levels
 					for (int i=headingLevel+1; i<levelValues.length-1; i++) {levelValues[i]=0;} // reset the child levels to zero
 					levelValues[headingLevel] ++;
+					
 					sectionName = formatSectionName(levelValues, "Section") + " - " + p.getText(); // Get the new heading level
 					if (doDebug) {
 						System.out.println("Processing style entry: "+style+". Calculated as :"+sectionName);
 					}
-				}
+				} 
+				
 				// Look for controls within the paragraph and put them in the table
 				for (String control : getControls(p.getText())) {
 					// CC - if the control hasn't been seen before, create a new array of sections for it
@@ -66,17 +72,40 @@ public class SecurityControlScan {
 					}
 					controlsMap.get(control).add(sectionName);
 				}
-				// now see if the paragraph has any comments
-				List<CTMarkupRange> markups = p.getCTP().getCommentRangeEndList();
-				for (CTMarkupRange markup: markups) {
-					XWPFComment commentText = xdoc.getCommentByID(markup.getId().toString());
-					System.out.println(sectionName+" has comment: "+commentText.getText());
+				
+				if (doComments) {
+					// now see if the paragraph has any comments
+					// Locate the startRange
+					//List<CTMarkupRange> markups = p.getCTP().getCommentRangeEndList();
+					List<CTMarkupRange> markups = p.getCTP().getCommentRangeStartList();
+					for (CTMarkupRange markup: markups) {
+						StringBuilder comments = new StringBuilder();
+						StringBuilder commentHighlight = new StringBuilder();
+						// Get the highlighted comment anchor text and replace "~" with a *-  we use ~ as delimiter for output
+						for (XWPFRun run : p.getRuns()) {
+						commentHighlight.append(run.text().replace("~", "*"));
+						}
+						XWPFComment commentText = xdoc.getCommentByID(markup.getId().toString());
+						comments.append("~" + sectionName + "~" + commentText.getAuthor() + "~" + commentText.getText().replace("\n", "").replace("\r", "").replace("~", "*") + "~" + commentHighlight.toString());
+						commentsMap.put(commentText.getId(), new ArrayList<String> ());
+						commentsMap.get(commentText.getId()).add(comments.toString());
+						if (doDebug) {
+							System.out.println("----" + commentText.getId() + comments.toString());
+						}
+					}
 				}
-            }
+			}
 			// sort the controls 
 			Map<String, ArrayList<String>> sortedControls = sortControls(controlsMap);
-//			printList(sortedControls);
+			
+			// DS - sortedComments requires and update to sort by CommentID as a Int instead of a string
+			if (doComments) {
+				Map<String, ArrayList<String>> sortedComments = sortControls(commentsMap);
+				writeList(sortedComments, fileName+"-comments.csv");
+			}
+	    //	printList(sortedControls);
 			writeList(sortedControls, fileName+"-controls.csv");
+			
 			
 		} catch (Exception e) {
 			System.out.println("ex"+e.getMessage());
@@ -122,7 +151,6 @@ public class SecurityControlScan {
         }
         return sortedControls;
 	}
-	
 	
 	// Format the document section name. This is needed because Word doesn't store
 	// the actual section numbers, just section hierarchy. The section numbers need
@@ -173,5 +201,6 @@ public class SecurityControlScan {
         fw.close();
         System.out.println("Wrote "+map.size()+" entries to "+fileName+".");
     }	
+	
 
 }
